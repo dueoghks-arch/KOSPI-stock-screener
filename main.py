@@ -42,7 +42,7 @@ def send_email(content, is_html=False):
     except Exception as e:
         print(f"메일 발송 실패: {e}")
 
-def screen_stocks(min_gain=0.05, max_gain=0.30):
+def screen_stocks(min_gain=0.10, max_gain=1.50):
     tickers = get_kospi200_tickers()
     if not tickers: return
 
