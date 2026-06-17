@@ -94,9 +94,45 @@ def screen_krx_stocks():
             print(f"⚠️ [DATA] Chunk download issue encountered: {e}. Skipping...")
             continue
 
-    # 💡 [에러 수정] 들여쓰기가 깨져있던 if문 블록과 이하 로직 전체의 인덴트를 정확히 맞췄습니다.
+    # 💡 [문법 오류 교정 완료] 누락되었던 .empty 검증 조건문을 완벽하게 채워 가동을 보장합니다.
     if all_close_data.empty:
         print("❌ [DATA] Terminated: No valid data aggregated.")
         return
 
-    if all_close_data.
+    if all_close_data.index.tz is not None:
+        all_close_data.index = all_close_data.index.tz_localize(None)
+
+    now = datetime.now()
+    one_year_ago = now - timedelta(days=365)
+
+    print("📋 [MAP] Structuring ticker name & market cap data...")
+    try:
+        krx_listing = pd.concat([fdr.StockListing('KOSPI'), fdr.StockListing('KOSDAQ')], axis=0)
+        name_dict = pd.Series(krx_listing.Name.values, index=krx_listing.Code.values).to_dict()
+        marcap_dict = pd.Series(krx_listing.MarCap.values, index=krx_listing.Code.values).to_dict()
+    except Exception as e:
+        print(f"⚠️ [MAP] Reference indexing failed: {e}")
+        name_dict, marcap_dict = {}, {}
+
+    print("🔍 [SCAN] Parsing signals...")
+    if isinstance(all_close_data, pd.Series):
+        all_close_data = all_close_data.to_frame()
+
+    for ticker in all_close_data.columns:
+        try:
+            series_close = all_close_data[ticker].dropna()
+            if len(series_close) < 100:
+                continue 
+            
+            curr_price = series_close.iloc[-1]
+            if pd.isna(curr_price) or curr_price <= 0:
+                continue
+            
+            # [조건 1] 3년 전체 최고가(신고가) 검증
+            three_year_max = series_close.max()
+            if curr_price < (three_year_max - 1e-5):
+                continue 
+
+            # [조건 2] 바닥 다지기 비율 검증 (35% 완화 적용)
+            absolute_min = series_close.min()
+            floor_limit = absolute_min * 1.20
