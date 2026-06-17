@@ -8,20 +8,37 @@ import smtplib
 from email.mime.text import MIMEText
 import time
 
-def get_all_krx_tickers():
-    """FinanceDataReader를 이용해 코스피(KOSPI)와 코스닥(KOSDAQ) 전 종목 수집"""
-    print("⏳ [KRX] Fetching tickers...")
+def get_filtered_krx_tickers(kosdaq_percentile=50):
+    """
+    [수정] KOSPI 전 종목 및 KOSDAQ 시가총액 상위 50% 종목만 선별하여 수집
+    """
+    print("⏳ [KRX] Fetching and filtering tickers...")
     try:
+        # 1. 코스피/코스닥 기본 리스트 가져오기
         df_kospi = fdr.StockListing('KOSPI')
         df_kosdaq = fdr.StockListing('KOSDAQ')
         
-        # yfinance 형식(.KS, .KQ)으로 매핑
+        # 2. 코스닥 상위 50% 컷오프 계산 (MarCap 기준)
+        # 문자열이나 결측치가 있을 수 있으므로 숫자형 변환 및 정렬
+        df_kosdaq['MarCap'] = pd.to_numeric(df_kosdaq['MarCap'], errors='coerce')
+        df_kosdaq = df_kosdaq.dropna(subset=['MarCap'])
+        
+        cutoff_value = df_kosdaq['MarCap'].quantile(1 - (kosdaq_percentile / 100))
+        df_kosdaq_filtered = df_kosdaq[df_kosdaq['MarCap'] >= cutoff_value]
+        
+        # 3. yfinance 형식(.KS, .KQ)으로 매핑
         kospi_tickers = [f"{row['Code']}.KS" for _, row in df_kospi.iterrows() if len(str(row['Code'])) == 6]
-        kosdaq_tickers = [f"{row['Code']}.KQ" for _, row in df_kosdaq.iterrows() if len(str(row['Code'])) == 6]
+        kosdaq_tickers = [f"{row['Code']}.KQ" for _, row in df_kosdaq_filtered.iterrows() if len(str(row['Code'])) == 6]
         
         tickers = kospi_tickers + kosdaq_tickers
-        print(f"✅ [KRX] Done. (KOSPI: {len(kospi_tickers)}, KOSDAQ: {len(kosdaq_tickers)}, Total: {len(tickers)})")
+        
+        cutoff_in_eok = round(cutoff_value / 1e8, 1)
+        print(f"✅ [KRX] 필터링 완료.")
+        print(f"   > KOSPI: {len(kospi_tickers)}개 (전체)")
+        print(f"   > KOSDAQ: {len(kosdaq_tickers)}개 (시총 상위 {kosdaq_percentile}%, 기준점: 약 {cutoff_in_eok:,}억 원 이상)")
+        print(f"   > 총 대상 종목: {len(tickers)}개")
         return tickers
+        
     except Exception as e:
         print(f"⚠️ [KRX] Failed: {e}. Using fallback assets.")
         return ['005930.KS', '000660.KS', '005380.KS', '035420.KS', '035720.KS']
@@ -42,7 +59,6 @@ def send_email(content, is_html=False):
     msg['To'] = user
 
     try:
-        # 💡 코드가 잘리지 않도록 변수명을 극도로 축소하여 4줄로 마감 로직 재구축
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(user, pw)
@@ -53,7 +69,8 @@ def send_email(content, is_html=False):
         print(f"❌ [EMAIL] Dispatch failed: {e}")
 
 def screen_krx_stocks():
-    tickers = get_all_krx_tickers()
+    # [수정] 필터링된 티커 파싱 함수로 대체
+    tickers = get_filtered_krx_tickers(kosdaq_percentile=50)
     results = []
     print(f"📊 [SCAN] Analyzing {len(tickers)} assets under multi-layer criteria...")
     
@@ -97,6 +114,11 @@ def screen_krx_stocks():
         name_dict, marcap_dict = {}, {}
 
     print("🔍 [SCAN] Parsing signals...")
+    
+    # 단일 종목 다운로드 시 Series 변환 방지 구조화
+    if isinstance(all_close_data, pd.Series):
+        all_close_data = all_close_data.to_frame()
+
     for ticker in all_close_data.columns:
         try:
             series_close = all_close_data[ticker].dropna()
@@ -168,7 +190,7 @@ def screen_krx_stocks():
         
         html_content = f"""
         <h3 style="color: #0d47a1;">🇰🇷 국장 3년 박스권 상단 돌파형 완만 상승주 검색 보고서 ({today_str})</h3>
-        <p><b>시장 범위:</b> KOSPI, KOSDAQ 전체 상장사</p>
+        <p><b>시장 범위:</b> KOSPI 전체 및 KOSDAQ 상위 50% 선별</p>
         <ul>
             <li style="color: #d32f2f;"><b>이번 주 주봉 종가가 최근 3년 최고가(신고가)를 기록 중인 종목</b></li>
             <li>최근 3년 중 최저가 부근(+20% 이내)에서 전체 기간의 50% 이상 머무르며 매물을 다진 종목</li>
@@ -182,9 +204,9 @@ def screen_krx_stocks():
     else:
         no_result_html = f"""
         <h3 style="color: #b71c1c;">⚠️ 국장 스캐너 알림 ({today_str})</h3>
-        <p>현재 대한민국 코스피/코스닥 시장에 6대 정밀 돌파 패턴 조건을 동시에 만족하는 종목이 없습니다.</p>
+        <p>현재 국내 시장에 시총 필터링 및 6대 정밀 돌파 패턴 조건을 동시에 만족하는 종목이 없습니다.</p>
         """
-        print("ℹ️ [REPORT] No assets matched criteria. Routing notification...")
+        print("ℹ : [REPORT] No assets matched criteria. Routing notification...")
         send_email(no_result_html, is_html=True)
 
 if __name__ == "__main__":
