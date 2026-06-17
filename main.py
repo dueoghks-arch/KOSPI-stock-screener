@@ -138,7 +138,7 @@ def screen_krx_stocks():
             if curr_price < (three_year_max - 1e-5): 
                 continue 
 
-            # [조건 2] 최저가 부근 바닥 다지기 비율 검증 (35%로 완화)
+            # [조건 2] 최저가 부근 바닥 다지기 비율 검증 (10%로 완화)
             absolute_min = series_close.min()
             floor_limit = absolute_min * 1.50
             weeks_in_floor = series_close[(series_close >= absolute_min) & (series_close <= floor_limit)].count()
@@ -202,7 +202,7 @@ def screen_krx_stocks():
         <p><b>시장 범위:</b> KOSPI 전체 및 KOSDAQ 상위 50% 선별</p>
         <ul>
             <li style="color: #d32f2f;"><b>이번 주 주봉 종가가 최근 3년 최고가(신고가)를 기록 중인 종목</b></li>
-            <li><b>바닥밀집도 허들 완화:</b> 35% 이상 (3년 중 최소 1년 이상 바닥 다지기)</li>
+            <li><b>바닥밀집도 허들 완화:</b> 10% 이상 (3년 중 최소 1년 이상 바닥 다지기)</li>
             <li><b>기울기 각도 무제한:</b> 오버슈팅 구간에 진입한 강력한 장대양봉 돌파주 포함</li>
         </ul><br>
         {styled_table}
@@ -214,7 +214,7 @@ def screen_krx_stocks():
         <h3 style="color: #b71c1c;">⚠️ 국장 스캐너 알림 ({today_str})</h3>
         <p><b>시장 범위:</b> KOSPI 전체 및 KOSDAQ 상위 50% 선별</p>
         <hr>
-        <p>현재 조건 완화 기준(매집 35% 이상, 각도 제한 없음)을 만족하는 국장 장기 박스권 돌파형 종목이 없습니다.</p>
+        <p>현재 조건 완화 기준(매집 10% 이상, 최저가~최저가*1.5 사이 가격을 매집 박스권)을 만족하는 국장 장기 박스권 돌파형 종목이 없습니다.</p>
         """
         print("ℹ : [REPORT] No assets matched criteria. Routing notification...")
         send_email(no_result_html, is_html=True)
