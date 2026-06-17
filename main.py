@@ -9,7 +9,9 @@ from email.mime.text import MIMEText
 import time
 
 def get_filtered_krx_tickers(kosdaq_percentile=50):
-    """KOSPI 전 종목 및 KOSDAQ 시가총액 상위 50% 종목만 선별하여 수집"""
+    """
+    [수정] KOSPI 전 종목 및 KOSDAQ 시가총액 상위 50% 종목만 선별하여 수집
+    """
     print("⏳ [KRX] Fetching and filtering tickers...")
     try:
         # 1. 코스피/코스닥 기본 리스트 가져오기
@@ -17,6 +19,7 @@ def get_filtered_krx_tickers(kosdaq_percentile=50):
         df_kosdaq = fdr.StockListing('KOSDAQ')
         
         # 2. 코스닥 상위 50% 컷오프 계산 (MarCap 기준)
+        # 문자열이나 결측치가 있을 수 있으므로 숫자형 변환 및 정렬
         df_kosdaq['MarCap'] = pd.to_numeric(df_kosdaq['MarCap'], errors='coerce')
         df_kosdaq = df_kosdaq.dropna(subset=['MarCap'])
         
@@ -44,7 +47,7 @@ def get_filtered_krx_tickers(kosdaq_percentile=50):
         return ['005930.KS', '000660.KS', '005380.KS', '035420.KS', '035720.KS']
 
 def send_email(content, is_html=False):
-    """구글 SMTP 서비스를 이용한 안정적인 이메일 발송 함수 (TLS 587 포트 방식)"""
+    """구글 SMTP 서비스를 이용한 안정적인 이메일 발송 함수"""
     user = os.environ.get('EMAIL_USER')
     pw = os.environ.get('EMAIL_PASS')
     
@@ -70,6 +73,7 @@ def send_email(content, is_html=False):
         raise e
 
 def screen_krx_stocks():
+    # 필터링된 티커 파싱 함수 호출
     tickers = get_filtered_krx_tickers(kosdaq_percentile=50)
     results = []
     print(f"📊 [SCAN] Analyzing {len(tickers)} assets under multi-layer criteria...")
@@ -91,10 +95,9 @@ def screen_krx_stocks():
             print(f"  > ⏳ Progress: {min(i + chunk_size, len(tickers))} / {len(tickers)} completed...")
             time.sleep(2.0)
         except Exception as e:
-            print(f"⚠️ [DATA] Chunk download issue encountered: {e}. Skipping...")
+            print("⚠️ [DATA] Chunk download issue encountered. Skipping...")
             continue
 
-    # 💡 [문법 오류 교정 완료] 누락되었던 .empty 검증 조건문을 완벽하게 채워 가동을 보장합니다.
     if all_close_data.empty:
         print("❌ [DATA] Terminated: No valid data aggregated.")
         return
@@ -115,24 +118,106 @@ def screen_krx_stocks():
         name_dict, marcap_dict = {}, {}
 
     print("🔍 [SCAN] Parsing signals...")
+    
+    # 단일 종목 다운로드 시 Series 변환 방지 구조화
     if isinstance(all_close_data, pd.Series):
         all_close_data = all_close_data.to_frame()
 
     for ticker in all_close_data.columns:
         try:
             series_close = all_close_data[ticker].dropna()
-            if len(series_close) < 100:
+            if len(series_close) < 100: 
                 continue 
             
             curr_price = series_close.iloc[-1]
-            if pd.isna(curr_price) or curr_price <= 0:
+            if pd.isna(curr_price) or curr_price <= 0: 
                 continue
             
             # [조건 1] 3년 전체 최고가(신고가) 검증
             three_year_max = series_close.max()
-            if curr_price < (three_year_max - 1e-5):
+            if curr_price < (three_year_max - 1e-5): 
                 continue 
 
-            # [조건 2] 바닥 다지기 비율 검증 (35% 완화 적용)
+            # [조건 2] 최저가 부근 바닥 다지기 비율 검증 (35%로 완화)
             absolute_min = series_close.min()
             floor_limit = absolute_min * 1.20
+            weeks_in_floor = series_close[(series_close >= absolute_min) & (series_close <= floor_limit)].count()
+            floor_ratio = weeks_in_floor / len(series_close)
+            
+            if floor_ratio < 0.35: 
+                continue 
+
+            # [조건 3] 박스권 상단 탈출 마진 검증 (+0% ~ +30% 이내)
+            box_period_series = series_close[series_close.index <= one_year_ago]
+            if box_period_series.empty: 
+                continue
+            
+            past_max = box_period_series.max() 
+            if pd.isna(past_max) or past_max == 0: 
+                continue
+            
+            if not (past_max <= curr_price <= past_max * 1.30): 
+                continue
+
+            # [조건 4] 완만한 장기 성장을 뜻하는 추세 기울기 평탄도 검증 (제한 조건 해제, 값만 기록)
+            start_price = series_close.iloc[0]
+            start_date = series_close.index[0]
+            end_date = series_close.index[-1]
+            
+            total_days = (end_date - start_date).days
+            
+            angle_deg = 0.0
+            if total_days > 0 and not pd.isna(start_price) and start_price > 0:
+                total_gain_ratio = (curr_price - start_price) / start_price
+                slope = (total_gain_ratio) / (total_days / 1095.0)
+                angle_deg = np.degrees(np.arctan(slope))
+
+            code_only = ticker.split('.')[0]
+            kor_name = name_dict.get(code_only, ticker)
+            raw_marcap = marcap_dict.get(code_only, 0)
+            marcap_in_gwan = round(raw_marcap / 1e11, 1) if raw_marcap else 0 
+
+            results.append({
+                '종목코드': code_only,
+                '종목명': kor_name,
+                '현재가(원)': f"{int(curr_price):,}",
+                '3년 최고가': f"{int(three_year_max):,}",
+                '바닥밀집도': f"{round(floor_ratio * 100, 1)}%",
+                '장기 추세각': f"{round(angle_deg, 1)}°",
+                '시가총액(천억원)': marcap_in_gwan
+            })
+            print(f"🎯 [MATCHED] Found: {kor_name}({code_only})")
+
+        except Exception:
+            continue
+
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    if results:
+        final_df = pd.DataFrame(results).sort_values(by='시가총액(천억원)', ascending=False)
+        table_html = final_df.to_html(index=False, border=1, justify='center')
+        styled_table = table_html.replace('border="1"', 'style="border-collapse: collapse; width: 100%; text-align: center; font-size: 14px;" border="1"')
+        
+        html_content = f"""
+        <h3 style="color: #0d47a1;">🇰🇷 국장 3년 박스권 상단 돌파형 종목 전수조사 보고서 ({today_str})</h3>
+        <p><b>시장 범위:</b> KOSPI 전체 및 KOSDAQ 상위 50% 선별</p>
+        <ul>
+            <li style="color: #d32f2f;"><b>이번 주 주봉 종가가 최근 3년 최고가(신고가)를 기록 중인 종목</b></li>
+            <li><b>바닥밀집도 허들 완화:</b> 35% 이상 (3년 중 최소 1년 이상 바닥 다지기)</li>
+            <li><b>기울기 각도 무제한:</b> 오버슈팅 구간에 진입한 강력한 장대양봉 돌파주 포함</li>
+        </ul><br>
+        {styled_table}
+        """
+        print("🚀 [REPORT] Match found. Routing to mailbox...")
+        send_email(html_content, is_html=True)
+    else:
+        no_result_html = f"""
+        <h3 style="color: #b71c1c;">⚠️ 국장 스캐너 알림 ({today_str})</h3>
+        <p><b>시장 범위:</b> KOSPI 전체 및 KOSDAQ 상위 50% 선별</p>
+        <hr>
+        <p>현재 조건 완화 기준(매집 35% 이상, 각도 제한 없음)을 만족하는 국장 장기 박스권 돌파형 종목이 없습니다.</p>
+        """
+        print("ℹ : [REPORT] No assets matched criteria. Routing notification...")
+        send_email(no_result_html, is_html=True)
+
+if __name__ == "__main__":
+    screen_krx_stocks()
