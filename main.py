@@ -9,9 +9,7 @@ from email.mime.text import MIMEText
 import time
 
 def get_filtered_krx_tickers(kosdaq_percentile=50):
-    """
-    KOSPI 전 종목 및 KOSDAQ 시가총액 상위 50% 종목만 선별하여 수집
-    """
+    """KOSPI 전 종목 및 KOSDAQ 시가총액 상위 50% 종목만 선별하여 수집"""
     print("⏳ [KRX] Fetching and filtering tickers...")
     try:
         # 1. 코스피/코스닥 기본 리스트 가져오기
@@ -35,7 +33,7 @@ def get_filtered_krx_tickers(kosdaq_percentile=50):
         tickers = kospi_tickers + kosdaq_tickers
         
         cutoff_in_eok = round(cutoff_value / 1e8, 1)
-        print(f"✅ [KRX] 필터링 완료.")
+        print("✅ [KRX] 필터링 완료.")
         print(f"   > KOSPI: {len(kospi_tickers)}개 (전체)")
         print(f"   > KOSDAQ: {len(kosdaq_tickers)}개 (시총 상위 {kosdaq_percentile}%, 기준점: 약 {cutoff_in_eok:,}억 원 이상)")
         print(f"   > 총 대상 종목: {len(tickers)}개")
@@ -61,7 +59,6 @@ def send_email(content, is_html=False):
     msg['To'] = user
 
     try:
-        # 💡 GitHub Actions 환경 방화벽을 안전하게 우회하는 TLS 587 세팅 유지
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(user, pw)
@@ -94,7 +91,12 @@ def screen_krx_stocks():
             print(f"  > ⏳ Progress: {min(i + chunk_size, len(tickers))} / {len(tickers)} completed...")
             time.sleep(2.0)
         except Exception as e:
-            print("⚠️ [DATA] Chunk download issue encountered. Skipping...")
+            print(f"⚠️ [DATA] Chunk download issue encountered: {e}. Skipping...")
             continue
 
+    # 💡 [에러 수정] 들여쓰기가 깨져있던 if문 블록과 이하 로직 전체의 인덴트를 정확히 맞췄습니다.
     if all_close_data.empty:
+        print("❌ [DATA] Terminated: No valid data aggregated.")
+        return
+
+    if all_close_data.
