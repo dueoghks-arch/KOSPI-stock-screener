@@ -2,7 +2,7 @@ import FinanceDataReader as fdr
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
 import smtplib
 from email.mime.text import MIMEText
@@ -10,18 +10,19 @@ import time
 
 def get_filtered_krx_tickers(kosdaq_percentile=50):
     """
-    KOSPI 전 종목 및 KOSDAQ 시가총액 상위 50% 종목만 선별하여 수집
+    KOSPI 전 종목 및 KOSDAQ 시가총액 상위 50% 종목 선별 및 메타데이터 반환
     """
     print("⏳ [KRX] Fetching and filtering tickers...")
     try:
         df_kospi = fdr.StockListing('KOSPI')
         df_kosdaq = fdr.StockListing('KOSDAQ')
         
+        df_kosdaq = df_kosdaq.copy()
         df_kosdaq['MarCap'] = pd.to_numeric(df_kosdaq['MarCap'], errors='coerce')
         df_kosdaq = df_kosdaq.dropna(subset=['MarCap'])
         
         cutoff_value = df_kosdaq['MarCap'].quantile(1 - (kosdaq_percentile / 100))
-        df_kosdaq_filtered = df_kosdaq[df_kosdaq['MarCap'] >= cutoff_value]
+        df_kosdaq_filtered = df_kosdaq[df_kosdaq['MarCap'] >= cutoff_value].copy()
         
         df_kospi['Code'] = df_kospi['Code'].astype(str).str.strip()
         df_kosdaq_filtered['Code'] = df_kosdaq_filtered['Code'].astype(str).str.strip()
@@ -30,17 +31,20 @@ def get_filtered_krx_tickers(kosdaq_percentile=50):
         kosdaq_tickers = [f"{code}.KQ" for code in df_kosdaq_filtered['Code'] if len(code) == 6]
         
         tickers = kospi_tickers + kosdaq_tickers
+        total_listing = pd.concat([df_kospi, df_kosdaq_filtered], axis=0)
         
         cutoff_in_eok = round(cutoff_value / 1e8, 1)
         print("✅ [KRX] 필터링 완료.")
         print(f"   > KOSPI: {len(kospi_tickers)}개 (전체)")
         print(f"   > KOSDAQ: {len(kosdaq_tickers)}개 (시총 상위 {kosdaq_percentile}%, 기준점: 약 {cutoff_in_eok:,}억 원 이상)")
         print(f"   > 총 대상 종목: {len(tickers)}개")
-        return tickers
+        
+        return tickers, total_listing
         
     except Exception as e:
         print(f"⚠️ [KRX] Failed: {e}. Using fallback assets.")
-        return ['005930.KS', '000660.KS', '005380.KS', '035420.KS', '035720.KS']
+        fallback_tickers = ['005930.KS', '000660.KS', '005380.KS', '035420.KS', '035720.KS']
+        return fallback_tickers, pd.DataFrame()
 
 def send_email(content, is_html=False):
     """구글 SMTP 서비스를 이용한 안정적인 이메일 발송 함수"""
@@ -53,167 +57,9 @@ def send_email(content, is_html=False):
         return
 
     msg = MIMEText(content, 'html' if is_html else 'plain')
-    msg['Subject'] = f"📈 [국내주식 전수조사] 3년 박스권 상단 돌파형 장기 신고가 종목 리포트 ({datetime.now().strftime('%Y-%m-%d')})"
+    msg['Subject'] = f"📈 [국내주식 전수조사] 주봉 이평선 돌파 종목 리포트 ({datetime.now().strftime('%Y-%m-%d')})"
     msg['From'] = user
     msg['To'] = user
 
     try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(user, pw)
-        server.sendmail(user, user, msg.as_string())
-        server.quit()
-        print("📧 [EMAIL] Report dispatched successfully!")
-    except Exception as e:
-        print(f"❌ [EMAIL] Dispatch failed: {e}")
-        raise e
-
-def screen_krx_stocks():
-    tickers = get_filtered_krx_tickers(kosdaq_percentile=50)
-    results = []
-    print(f"📊 [SCAN] Analyzing {len(tickers)} assets under multi-layer criteria...")
-    
-    chunk_size = 80
-    all_close_data = pd.DataFrame()
-    
-    print("⏳ [DATA] Downloading 3-year weekly chart history via yfinance...")
-    for i in range(0, len(tickers), chunk_size):
-        chunk_tickers = tickers[i:i+chunk_size]
-        try:
-            chunk_data = yf.download(chunk_tickers, period="3y", interval="1wk", progress=False, timeout=40)
-            if not chunk_data.empty and 'Close' in chunk_data.columns:
-                chunk_close = chunk_data['Close']
-                if all_close_data.empty:
-                    all_close_data = chunk_close
-                else:
-                    all_close_data = pd.concat([all_close_data, chunk_close], axis=1)
-            print(f"  > ⏳ Progress: {min(i + chunk_size, len(tickers))} / {len(tickers)} completed...")
-            time.sleep(2.0)
-        except Exception as e:
-            print("⚠️ [DATA] Chunk download issue encountered. Skipping...")
-            continue
-
-    if all_close_data.empty:
-        print("❌ [DATA] Terminated: No valid data aggregated.")
-        return
-
-    if all_close_data.index.tz is not None:
-        all_close_data.index = all_close_data.index.tz_localize(None)
-
-    now = datetime.now()
-    one_year_ago = now - timedelta(days=365)
-
-    print("📋 [MAP] Structuring ticker name & market cap data...")
-    try:
-        krx_listing = pd.concat([fdr.StockListing('KOSPI'), fdr.StockListing('KOSDAQ')], axis=0)
-        name_dict = pd.Series(krx_listing.Name.values, index=krx_listing.Code.values).to_dict()
-        marcap_dict = pd.Series(krx_listing.MarCap.values, index=krx_listing.Code.values).to_dict()
-    except Exception as e:
-        print(f"⚠️ [MAP] Reference indexing failed: {e}")
-        name_dict, marcap_dict = {}, {}
-
-    print("🔍 [SCAN] Parsing signals...")
-    
-    if isinstance(all_close_data, pd.Series):
-        all_close_data = all_close_data.to_frame()
-
-    for ticker in all_close_data.columns:
-        try:
-            series_close = all_close_data[ticker].dropna()
-            if len(series_close) < 100: 
-                continue 
-            
-            curr_price = series_close.iloc[-1]
-            if pd.isna(curr_price) or curr_price <= 0: 
-                continue
-            
-            # [조건 1] 3년 최고가 허들 완화 (최고가 대비 -3% 이내면 돌파로 인정)
-            three_year_max = series_close.max()
-            if curr_price < (three_year_max * 0.97): 
-                continue 
-
-            # [조건 2] 3년 평균가 기준 매집 박스권 계산 (0.5배 ~ 1.5배)
-            mean_price = series_close.mean()
-            box_lower = mean_price * 0.5
-            box_upper = mean_price * 1.5
-            
-            weeks_in_box = series_close[(series_close >= box_lower) & (series_close <= box_upper)].count()
-            floor_ratio = weeks_in_box / len(series_close)
-            
-            # 💡 종목 발굴을 위해 박스권 기간 제한(if floor_ratio < 0.50)을 해제합니다.
-
-            # [조건 3] 박스권 상단 탈출 마진 검증 (+0% ~ +50% 이내)
-            box_period_series = series_close[series_close.index <= one_year_ago]
-            if box_period_series.empty: 
-                continue
-            
-            past_max = box_period_series.max() 
-            if pd.isna(past_max) or past_max == 0: 
-                continue
-            
-            # 1년 전 고점 돌파 검증 마진 유지
-            if not (past_max * 0.95 <= curr_price <= past_max * 1.50): 
-                continue
-
-            # [조건 4] 추세 기울기 계산
-            start_price = series_close.iloc[0]
-            start_date = series_close.index[0]
-            end_date = series_close.index[-1]
-            
-            total_days = (end_date - start_date).days
-            
-            angle_deg = 0.0
-            if total_days > 0 and not pd.isna(start_price) and start_price > 0:
-                total_gain_ratio = (curr_price - start_price) / start_price
-                slope = (total_gain_ratio) / (total_days / 1095.0)
-                angle_deg = np.degrees(np.arctan(slope))
-
-            code_only = ticker.split('.')[0]
-            kor_name = name_dict.get(code_only, ticker)
-            raw_marcap = marcap_dict.get(code_only, 0)
-            marcap_in_gwan = round(raw_marcap / 1e11, 1) if raw_marcap else 0 
-
-            results.append({
-                '종목코드': code_only,
-                '종목명': kor_name,
-                '현재가(원)': f"{int(curr_price):,}",
-                '3년 평균가(원)': f"{int(mean_price):,}",
-                '박스권 체류율': f"{round(floor_ratio * 100, 1)}%",
-                '장기 추세각': f"{round(angle_deg, 1)}°",
-                '시가총액(천억원)': marcap_in_gwan
-            })
-            print(f"🎯 [MATCHED] Found: {kor_name}({code_only})")
-
-        except Exception:
-            continue
-
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    if results:
-        final_df = pd.DataFrame(results).sort_values(by='시가총액(천억원)', ascending=False)
-        table_html = final_df.to_html(index=False, border=1, justify='center')
-        styled_table = table_html.replace('border="1"', 'style="border-collapse: collapse; width: 100%; text-align: center; font-size: 14px;" border="1"')
-        
-        html_content = f"""
-        <h3 style="color: #0d47a1;">🇰🇷 국장 3년 박스권 상단 돌파형 종목 전수조사 보고서 ({today_str})</h3>
-        <p><b>시장 범위:</b> KOSPI 전체 및 KOSDAQ 상위 50% 선별</p>
-        <ul>
-            <li style="color: #d32f2f;"><b>이번 주 주봉 종가가 최근 3년 최고가 부근(-3% 이내~돌파)을 기록 중인 종목</b></li>
-            <li><b>평균가 기반 매집 조건:</b> 3년 평균 주가의 0.5배 ~ 1.5배 구간 범위 산출 (기간 제한 없음)</li>
-            <li><b>박스권 돌파 마진:</b> 1년 전 고점 대비 +50% 이내 돌파 종목 포함</li>
-        </ul><br>
-        {styled_table}
-        """
-        print("🚀 [REPORT] Match found. Routing to mailbox...")
-        send_email(html_content, is_html=True)
-    else:
-        no_result_html = f"""
-        <h3 style="color: #b71c1c;">⚠️ 국장 스캐너 알림 ({today_str})</h3>
-        <p><b>시장 범위:</b> KOSPI 전체 및 KOSDAQ 상위 50% 선별</p>
-        <hr>
-        <p>현재 기준(최고가 -3% 이내 진입, 돌파 마진 +50% 이내)을 만족하는 국장 종목이 포착되지 않았습니다.</p>
-        """
-        print("ℹ️ [REPORT] No assets matched criteria. Routing notification...")
-        send_email(no_result_html, is_html=True)
-
-if __name__ == "__main__":
-    screen_krx_stocks()
+        server = smtplib.SMTP('smtp.gmail.com',
