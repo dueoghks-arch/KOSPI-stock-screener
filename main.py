@@ -62,4 +62,4 @@ def send_email(content, is_html=False):
     msg['To'] = user
 
     try:
-        server = smtplib.SMTP('smtp.gmail.com',
+        server = smtplib.SMTP('smtp.gmail.com', 587)
