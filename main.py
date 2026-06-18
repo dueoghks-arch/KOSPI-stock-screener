@@ -14,18 +14,22 @@ def get_filtered_krx_tickers(kosdaq_percentile=50):
         df_kospi = fdr.StockListing('KOSPI')
         df_kosdaq = fdr.StockListing('KOSDAQ')
         
+        # 💡 핵심 수정 1: 컬럼명 대소문자 변경(Marcap vs MarCap)으로 인한 에러 방지를 위해 모두 대문자로 통일
+        df_kospi.columns = [col.upper() for col in df_kospi.columns]
+        df_kosdaq.columns = [col.upper() for col in df_kosdaq.columns]
+        
         df_kosdaq = df_kosdaq.copy()
-        df_kosdaq['MarCap'] = pd.to_numeric(df_kosdaq['MarCap'], errors='coerce')
-        df_kosdaq = df_kosdaq.dropna(subset=['MarCap'])
+        df_kosdaq['MARCAP'] = pd.to_numeric(df_kosdaq['MARCAP'], errors='coerce')
+        df_kosdaq = df_kosdaq.dropna(subset=['MARCAP'])
         
-        cutoff_value = df_kosdaq['MarCap'].quantile(1 - (kosdaq_percentile / 100))
-        df_kosdaq_filtered = df_kosdaq[df_kosdaq['MarCap'] >= cutoff_value].copy()
+        cutoff_value = df_kosdaq['MARCAP'].quantile(1 - (kosdaq_percentile / 100))
+        df_kosdaq_filtered = df_kosdaq[df_kosdaq['MARCAP'] >= cutoff_value].copy()
         
-        df_kospi['Code'] = df_kospi['Code'].astype(str).str.strip()
-        df_kosdaq_filtered['Code'] = df_kosdaq_filtered['Code'].astype(str).str.strip()
+        df_kospi['CODE'] = df_kospi['CODE'].astype(str).str.strip()
+        df_kosdaq_filtered['CODE'] = df_kosdaq_filtered['CODE'].astype(str).str.strip()
         
-        kospi_tickers = [f"{code}.KS" for code in df_kospi['Code'] if len(code) == 6]
-        kosdaq_tickers = [f"{code}.KQ" for code in df_kosdaq_filtered['Code'] if len(code) == 6]
+        kospi_tickers = [f"{code}.KS" for code in df_kospi['CODE'] if len(code) == 6]
+        kosdaq_tickers = [f"{code}.KQ" for code in df_kosdaq_filtered['CODE'] if len(code) == 6]
         
         tickers = kospi_tickers + kosdaq_tickers
         total_listing = pd.concat([df_kospi, df_kosdaq_filtered], axis=0)
@@ -40,8 +44,14 @@ def get_filtered_krx_tickers(kosdaq_percentile=50):
         
     except Exception as e:
         print(f"⚠️ [KRX] Failed: {e}. Using fallback assets.")
+        # 💡 핵심 수정 2: 비상 모드(Fallback) 작동 시에도 종목명과 시총이 나오도록 비상용 메타데이터 구축
         fallback_tickers = ['005930.KS', '000660.KS', '005380.KS', '035420.KS', '035720.KS']
-        return fallback_tickers, pd.DataFrame()
+        fallback_df = pd.DataFrame({
+            'CODE': ['005930', '000660', '005380', '035420', '035720'],
+            'NAME': ['삼성전자', 'SK하이닉스', '현대차', 'NAVER', '카카오'],
+            'MARCAP': [400000000000000, 100000000000000, 50000000000000, 30000000000000, 20000000000000]
+        })
+        return fallback_tickers, fallback_df
 
 def send_email(content, is_html=False):
     user = os.environ.get('EMAIL_USER')
@@ -68,7 +78,6 @@ def send_email(content, is_html=False):
         print(f"❌ [EMAIL] Dispatch failed: {e}")
         raise e
 
-# 💡 여기서부터가 누락되었던 핵심 실행 코드입니다!
 def screen_krx_stocks():
     tickers, krx_listing = get_filtered_krx_tickers(kosdaq_percentile=50)
     results = []
@@ -100,8 +109,12 @@ def screen_krx_stocks():
     if all_close_data.index.tz is not None:
         all_close_data.index = all_close_data.index.tz_localize(None)
 
-    name_dict = pd.Series(krx_listing.Name.values, index=krx_listing.Code.values).to_dict() if not krx_listing.empty else {}
-    marcap_dict = pd.Series(krx_listing.MarCap.values, index=krx_listing.Code.values).to_dict() if not krx_listing.empty else {}
+    # 💡 핵심 수정 3: 매핑 딕셔너리 키를 대문자 컬럼명으로 수정
+    name_dict = pd.Series(krx_listing['NAME'].values, index=krx_listing['CODE'].values).to_dict() if not krx_listing.empty else {}
+    marcap_dict = pd.Series(krx_listing['MARCAP'].values, index=krx_listing['CODE'].values).to_dict() if not krx_listing.empty else {}
+
+    if isinstance(all_close_data, pd.Series):
+        all_close_data = all_close_data.to_frame()
 
     for ticker in all_close_data.columns:
         try:
@@ -129,6 +142,15 @@ def screen_krx_stocks():
             kor_name = name_dict.get(code_only, ticker)
             raw_marcap = marcap_dict.get(code_only, 0)
             
+            # 💡 핵심 수정 4: 매핑에 실패한 종목이 있다면 야후 파이낸스에서 실시간으로 이름을 긁어오도록 2차 방어선 구축
+            if kor_name == ticker or raw_marcap == 0:
+                try:
+                    info = yf.Ticker(ticker).info
+                    kor_name = info.get('shortName', kor_name)
+                    raw_marcap = info.get('marketCap', raw_marcap)
+                except:
+                    pass
+
             results.append({
                 '종목코드': code_only, '종목명': kor_name,
                 '현재가(원)': f"{int(curr_price):,}",
