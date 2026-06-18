@@ -61,7 +61,7 @@ def send_email(content, is_html=False):
         return
 
     msg = MIMEText(content, 'html' if is_html else 'plain')
-    msg['Subject'] = f"📈 [국장 스캐너] 트리플 AND(다중돌파+정배열 수렴) 포착 리포트 ({datetime.now().strftime('%Y-%m-%d')})"
+    msg['Subject'] = f"📈 [국장 스캐너] 더블 AND(다중 이평선 돌파) 포착 리포트 ({datetime.now().strftime('%Y-%m-%d')})"
     msg['From'] = user
     msg['To'] = user
 
@@ -79,7 +79,7 @@ def send_email(content, is_html=False):
 def screen_krx_stocks():
     tickers, krx_listing = get_filtered_krx_tickers(kosdaq_percentile=50)
     results = []
-    print(f"📊 [SCAN] Analyzing {len(tickers)} assets under Strict AND Logic (Crossover + Alignment + Proximity)...")
+    print(f"📊 [SCAN] Analyzing {len(tickers)} assets under Double AND Logic (Crossover)...")
     
     chunk_size = 80
     all_close_data = pd.DataFrame()
@@ -107,7 +107,6 @@ def screen_krx_stocks():
     if all_close_data.index.tz is not None:
         all_close_data.index = all_close_data.index.tz_localize(None)
 
-    # 💡 잘림 방지: if~else 블록으로 안전하게 딕셔너리 생성
     name_dict = {}
     marcap_dict = {}
     if not krx_listing.empty:
@@ -147,24 +146,11 @@ def screen_krx_stocks():
             cond2 = cross_30_200.iloc[-26:].any()
 
             # ---------------------------------------------------------
-            # 조건 3. 현재가 대비 10% 이내 수렴 AND 완벽 정배열 유지
+            # 🎯 최종 관문: 두 가지 조건을 모두 만족(AND)해야만 통과
             # ---------------------------------------------------------
-            # 정배열 검증
-            is_aligned = (curr_ma5 > curr_ma30) and (curr_ma30 > curr_ma200)
-            
-            # 10% 이내 수렴 검증 함수
-            def is_close_to_price(ma_val, price=curr_price, tol=0.10):
-                return abs(price - ma_val) / price <= tol
-
-            cond3 = is_aligned and is_close_to_price(curr_ma5) and is_close_to_price(curr_ma30) and is_close_to_price(curr_ma200)
-
-            # ---------------------------------------------------------
-            # 🎯 최종 관문: 세 가지 조건을 모두 만족(AND)해야만 통과
-            # ---------------------------------------------------------
-            if not (cond1 and cond2 and cond3): 
+            if not (cond1 and cond2): 
                 continue
             
-            # 여기까지 살아남았다면 3가지 조건을 모두 충족한 완벽한 종목임
             code_only = ticker.split('.')[0]
             kor_name = name_dict.get(code_only, ticker)
             raw_marcap = marcap_dict.get(code_only, 0)
@@ -181,7 +167,7 @@ def screen_krx_stocks():
                 '종목코드': code_only, 
                 '종목명': kor_name,
                 '현재가(원)': f"{int(curr_price):,}",
-                '조건 만족 여부': "✅ 조건 1, 2, 3 동시 만족",
+                '조건 만족 여부': "✅ 조건 1, 2 동시 만족",
                 '5주 이평': f"{int(curr_ma5):,}",
                 '30주 이평': f"{int(curr_ma30):,}",
                 '200주 이평': f"{int(curr_ma200):,}",
@@ -198,13 +184,12 @@ def screen_krx_stocks():
         table_html = final_df.to_html(index=False, border=1, justify='center').replace('border="1"', 'style="border-collapse: collapse; width: 100%; text-align: center; font-size: 14px;" border="1"')
         
         html_content = f"""
-        <h3 style="color: #0d47a1;">🇰🇷 주봉 트리플 AND (초밀집 & 정배열 돌파) 보고서 ({today_str})</h3>
+        <h3 style="color: #0d47a1;">🇰🇷 주봉 더블 AND (다중 이평선 상향 돌파) 보고서 ({today_str})</h3>
         <div style="background-color: #f5f5f5; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
             <p style="margin: 0; font-size: 13px; color: #333;">
-            <b>[적용 로직: 아래 3가지 조건 동시 만족 종목 선별]</b><br>
+            <b>[적용 로직: 아래 2가지 조건 동시 만족 종목 선별]</b><br>
             <b>1.</b> 최근 4주 내 5주 이평선이 30주 또는 200주 상향 돌파 <b>(AND)</b><br>
-            <b>2.</b> 최근 6개월 내 30주 이평선이 200주 상향 돌파 <b>(AND)</b><br>
-            <b>3.</b> 현재 주가와 5주, 30주, 200주 이평선이 모두 10% 이내 초밀집 수렴 & 완벽 정배열 [5주 > 30주 > 200주]
+            <b>2.</b> 최근 6개월 내 30주 이평선이 200주 상향 돌파
             </p>
         </div>
         {table_html}
@@ -213,7 +198,7 @@ def screen_krx_stocks():
     else:
         html_content = f"""
         <h3 style="color: #b71c1c;">⚠️ 국장 스캐너 알림 ({today_str})</h3>
-        <p>오늘 기준 <b>다중 돌파(최근 4주/6개월)와 정배열 초밀집 조건(10% 이내)</b>을 동시에 만족하는 강력한 상승 초입 종목이 포착되지 않았습니다.</p>
+        <p>오늘 기준 <b>다중 이평선 상향 돌파 (최근 4주 내 단기 돌파 & 최근 6개월 내 중기 돌파)</b> 조건을 동시에 만족하는 종목이 포착되지 않았습니다.</p>
         """
         send_email(html_content, is_html=True)
 
