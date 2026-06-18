@@ -64,3 +64,6 @@ def send_email(content, is_html=False):
     msg['Subject'] = f"📈 [국장 스캐너] 더블 AND(다중 이평선 수렴/돌파) 포착 리포트 ({datetime.now().strftime('%Y-%m-%d')})"
     msg['From'] = user
     msg['To'] = user
+
+if __name__ == "__main__":
+    screen_krx_stocks()
