@@ -9,9 +9,6 @@ from email.mime.text import MIMEText
 import time
 
 def get_filtered_krx_tickers(kosdaq_percentile=50):
-    """
-    KOSPI 전 종목 및 KOSDAQ 시가총액 상위 50% 종목 선별 및 메타데이터 반환
-    """
     print("⏳ [KRX] Fetching and filtering tickers...")
     try:
         df_kospi = fdr.StockListing('KOSPI')
@@ -47,7 +44,6 @@ def get_filtered_krx_tickers(kosdaq_percentile=50):
         return fallback_tickers, pd.DataFrame()
 
 def send_email(content, is_html=False):
-    """구글 SMTP 서비스를 이용한 안정적인 이메일 발송 함수"""
     user = os.environ.get('EMAIL_USER')
     pw = os.environ.get('EMAIL_PASS')
     
@@ -62,7 +58,6 @@ def send_email(content, is_html=False):
     msg['To'] = user
 
     try:
-        # 정상적으로 587 포트와 함께 괄호가 닫히고, try 블록 내부에 들어와야 합니다.
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(user, pw)
@@ -70,6 +65,93 @@ def send_email(content, is_html=False):
         server.quit()
         print("📧 [EMAIL] Report dispatched successfully!")
     except Exception as e:
-        # try 문과 일치하는 레벨로 except 블록이 존재해야 문법 에러가 나지 않습니다.
         print(f"❌ [EMAIL] Dispatch failed: {e}")
         raise e
+
+# 💡 여기서부터가 누락되었던 핵심 실행 코드입니다!
+def screen_krx_stocks():
+    tickers, krx_listing = get_filtered_krx_tickers(kosdaq_percentile=50)
+    results = []
+    print(f"📊 [SCAN] Analyzing {len(tickers)} assets under Moving Average Crossover criteria...")
+    
+    chunk_size = 80
+    all_close_data = pd.DataFrame()
+    
+    print("⏳ [DATA] Downloading 5-year weekly chart history via yfinance...")
+    for i in range(0, len(tickers), chunk_size):
+        chunk_tickers = tickers[i:i+chunk_size]
+        try:
+            chunk_data = yf.download(chunk_tickers, period="5y", interval="1wk", group_by='column', progress=False, timeout=40)
+            if not chunk_data.empty and 'Close' in chunk_data.columns:
+                chunk_close = chunk_data['Close']
+                if all_close_data.empty:
+                    all_close_data = chunk_close
+                else:
+                    all_close_data = pd.concat([all_close_data, chunk_close], axis=1)
+            print(f"  > ⏳ Progress: {min(i + chunk_size, len(tickers))} / {len(tickers)} completed...")
+            time.sleep(1.5)
+        except Exception as e:
+            continue
+
+    if all_close_data.empty:
+        print("❌ [DATA] Terminated: No valid data aggregated.")
+        return
+
+    if all_close_data.index.tz is not None:
+        all_close_data.index = all_close_data.index.tz_localize(None)
+
+    name_dict = pd.Series(krx_listing.Name.values, index=krx_listing.Code.values).to_dict() if not krx_listing.empty else {}
+    marcap_dict = pd.Series(krx_listing.MarCap.values, index=krx_listing.Code.values).to_dict() if not krx_listing.empty else {}
+
+    for ticker in all_close_data.columns:
+        try:
+            series_close = all_close_data[ticker].dropna()
+            if len(series_close) <= 200: continue 
+            
+            ma5 = series_close.rolling(window=5).mean()
+            ma30 = series_close.rolling(window=30).mean()
+            ma200 = series_close.rolling(window=200).mean()
+            
+            cross_30 = (ma5 > ma30) & (ma5.shift(1) <= ma30.shift(1))
+            cross_200 = (ma5 > ma200) & (ma5.shift(1) <= ma200.shift(1))
+            
+            recent_cross_30 = cross_30.iloc[-4:].any()
+            recent_cross_200 = cross_200.iloc[-4:].any()
+            
+            if not (recent_cross_30 or recent_cross_200): continue
+                
+            breakthrough_type = []
+            if recent_cross_30: breakthrough_type.append("5주-30주")
+            if recent_cross_200: breakthrough_type.append("5주-200주")
+            
+            curr_price = series_close.iloc[-1]
+            code_only = ticker.split('.')[0]
+            kor_name = name_dict.get(code_only, ticker)
+            raw_marcap = marcap_dict.get(code_only, 0)
+            
+            results.append({
+                '종목코드': code_only, '종목명': kor_name,
+                '현재가(원)': f"{int(curr_price):,}",
+                '돌파 유형 (최근 4주)': " / ".join(breakthrough_type),
+                '5주 이평': f"{int(ma5.iloc[-1]):,}",
+                '30주 이평': f"{int(ma30.iloc[-1]):,}" if not pd.isna(ma30.iloc[-1]) else "-",
+                '200주 이평': f"{int(ma200.iloc[-1]):,}" if not pd.isna(ma200.iloc[-1]) else "-",
+                '시가총액(천억원)': round(raw_marcap / 1e11, 1) if raw_marcap else 0
+            })
+        except Exception:
+            continue
+
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    print(f"📊 [DEBUG] 필터링 조건 통과한 최종 종목 수: {len(results)}개")
+
+    if results:
+        final_df = pd.DataFrame(results).sort_values(by='시가총액(천억원)', ascending=False)
+        table_html = final_df.to_html(index=False, border=1, justify='center').replace('border="1"', 'style="border-collapse: collapse; width: 100%; text-align: center; font-size: 14px;" border="1"')
+        
+        html_content = f"<h3>🇰🇷 주봉 이평선 돌파 보고서 ({today_str})</h3><br>{table_html}"
+        send_email(html_content, is_html=True)
+    else:
+        send_email(f"<h3>⚠️ 국장 스캐너 알림 ({today_str})</h3><p>최근 4주 내 돌파 종목이 없습니다.</p>", is_html=True)
+
+if __name__ == "__main__":
+    screen_krx_stocks()
