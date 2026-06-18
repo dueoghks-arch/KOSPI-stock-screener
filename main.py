@@ -62,4 +62,14 @@ def send_email(content, is_html=False):
     msg['To'] = user
 
     try:
+        # 정상적으로 587 포트와 함께 괄호가 닫히고, try 블록 내부에 들어와야 합니다.
         server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(user, pw)
+        server.sendmail(user, user, msg.as_string())
+        server.quit()
+        print("📧 [EMAIL] Report dispatched successfully!")
+    except Exception as e:
+        # try 문과 일치하는 레벨로 except 블록이 존재해야 문법 에러가 나지 않습니다.
+        print(f"❌ [EMAIL] Dispatch failed: {e}")
+        raise e
