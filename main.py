@@ -43,4 +43,24 @@ def get_filtered_krx_tickers(kosdaq_percentile=50):
         
     except Exception as e:
         print(f"⚠️ [KRX] Failed: {e}. Using fallback assets.")
-        fallback_tickers = ['005930.KS', '000660.KS', '005380
+        fallback_tickers = ['005930.KS', '000660.KS', '005380.KS', '035420.KS', '035720.KS']
+        fallback_df = pd.DataFrame({
+            'CODE': ['005930', '000660', '005380', '035420', '035720'],
+            'NAME': ['삼성전자', 'SK하이닉스', '현대차', 'NAVER', '카카오'],
+            'MARCAP': [400000000000000, 100000000000000, 50000000000000, 30000000000000, 20000000000000]
+        })
+        return fallback_tickers, fallback_df
+
+def send_email(content, is_html=False):
+    user = os.environ.get('EMAIL_USER')
+    pw = os.environ.get('EMAIL_PASS')
+    
+    if not user or not pw:
+        print("\n⚠️ [ENV] Secrets missing. Outputting directly to console:\n")
+        print(content)
+        return
+
+    msg = MIMEText(content, 'html' if is_html else 'plain')
+    msg['Subject'] = f"📈 [국장 스캐너] 더블 AND(다중 이평선 수렴/돌파) 포착 리포트 ({datetime.now().strftime('%Y-%m-%d')})"
+    msg['From'] = user
+    msg['To'] = user
